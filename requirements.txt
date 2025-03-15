@@ -1,0 +1,16 @@
+numpy
+opencv-python-headless
+deskew
+black
+shapely
+msgspec
+pillow
+
+pika
+boto3
+aio-pika
+aioboto3
+SQLAlchemy
+alembic
+python-dotenv
+motor
