@@ -5,15 +5,13 @@ import uuid
 import aio_pika
 import logging
 
-import numpy as np
 from PIL import Image
 from aio_pika.abc import AbstractIncomingMessage
+from pymongo.errors import PyMongoError
 
 from app.db.mongo import mongo_client, mongo_collection
-from app.service.blank_detector import BlankDetector
+from app.service.ocr_service import OcrService
 from app.storage.aio_boto import AioBoto
-from app.db.database import AsyncSessionLocal
-from app.db.models import ImageValidationResult
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
@@ -37,9 +35,8 @@ class AioConsumer:
         self._queue = None
         self._dlx = None
         self._dlq = None
-        self.blank_detector = BlankDetector(
-            bin_threshold=150, blank_threshold_ratio=0.99999
-        )
+        self.ocr_service = OcrService()
+
 
     async def connect(self):
         self._connection = await aio_pika.connect_robust(self.amqp_url)
@@ -89,33 +86,33 @@ class AioConsumer:
 
             try:
                 image = Image.open(file_obj)
-                image_np = np.array(image)
             except Exception as e:
                 logging.error(f"이미지 변환 실패: {e}")
                 file_obj.close()
                 return
-
-            is_blank = self.blank_detector.is_blank_image(image_np)
+            
+            ocr_result = self.ocr_service.ocr(image)
             file_obj.close()
-
-            async with AsyncSessionLocal() as session:
-                validation_result = ImageValidationResult(
-                    gid=gid, is_blank=is_blank, is_folded=False, tilt_angle=0.1
-                )
-                session.add(validation_result)
-                await session.commit()
-                logging.info("✅ DB에 정보 저장 완료")
-
-            session = await mongo_client.start_session()
-            async with session:
-                async with session.start_transaction():  # 트랜잭션 시작
-                    await mongo_collection.insert_one(
-                        {"name": "Alice", "age": 25}, session=session
-                    )
-                    await mongo_collection.insert_one(
-                        {"name": "Bob", "age": 30}, session=session
-                    )
-                    logging.info("✅ nosql에 정보 저장 완료")
+                
+            print(ocr_result.txts)
+            
+            # session = await mongo_client.start_session()
+            # async with session:
+            #     async with session.start_transaction():
+            #         await mongo_collection.insert_one(
+            #             {"name": "Alice", "age": 25}, session=session
+            #         )
+            #         logging.info("✅ nosql에 정보 저장 완료")
+            try:
+                result = await mongo_collection.insert_one({"name": "Alice", "age": 25})
+            
+                if result.inserted_id:
+                    logging.info(f"✅ nosql에 정보 저장 완료, ID: {result.inserted_id}")
+                else:
+                    logging.warning("⚠️ nosql에 정보가 저장되지 않았습니다.")
+            
+            except PyMongoError as e:
+                logging.error(f"❌ nosql 저장 실패: {e}")
 
     async def consume(self):
         if not self._queue:
