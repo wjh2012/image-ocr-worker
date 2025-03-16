@@ -70,12 +70,6 @@ class AioConsumer:
             file_name = data["file_name"]
             bucket_name = data["bucket"]
 
-            try:
-                gid = uuid.UUID(gid)
-            except ValueError:
-                logging.error(f"❌ 유효하지 않은 UUID 형식: {gid}")
-                return
-
             file_obj = io.BytesIO()
             await self.minio_manager.download_image_with_client(
                 bucket_name=bucket_name, key=file_name, file_obj=file_obj
