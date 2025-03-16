@@ -1,6 +1,7 @@
 import io
 import json
 import uuid
+from datetime import datetime
 
 import aio_pika
 import logging
@@ -37,7 +38,6 @@ class AioConsumer:
         self._dlq = None
         self.ocr_service = OcrService()
 
-
     async def connect(self):
         self._connection = await aio_pika.connect_robust(self.amqp_url)
         self._channel = await self._connection.channel()
@@ -62,6 +62,7 @@ class AioConsumer:
 
     async def on_message(self, message: AbstractIncomingMessage) -> None:
         async with message.process(requeue=True):
+            message_received_time = datetime.now()
             logging.info("📩 메시지 수신!")
 
             data = json.loads(message.body)
@@ -90,12 +91,14 @@ class AioConsumer:
                 logging.error(f"이미지 변환 실패: {e}")
                 file_obj.close()
                 return
-            
+            file_received_time = datetime.now()
+
             ocr_result = self.ocr_service.ocr(image)
+            created_time = datetime.now()
             file_obj.close()
-                
+
             print(ocr_result.txts)
-            
+
             # session = await mongo_client.start_session()
             # async with session:
             #     async with session.start_transaction():
@@ -104,13 +107,21 @@ class AioConsumer:
             #         )
             #         logging.info("✅ nosql에 정보 저장 완료")
             try:
-                result = await mongo_collection.insert_one({"name": "Alice", "age": 25})
-            
+                result = await mongo_collection.insert_one(
+                    {
+                        "gid": gid,
+                        "ocr_result": ocr_result.txts,
+                        "message_received_time": message_received_time,
+                        "file_received_time": file_received_time,
+                        "created_time": created_time,
+                    }
+                )
+
                 if result.inserted_id:
                     logging.info(f"✅ nosql에 정보 저장 완료, ID: {result.inserted_id}")
                 else:
                     logging.warning("⚠️ nosql에 정보가 저장되지 않았습니다.")
-            
+
             except PyMongoError as e:
                 logging.error(f"❌ nosql 저장 실패: {e}")
 
