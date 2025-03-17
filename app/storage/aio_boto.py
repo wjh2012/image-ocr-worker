@@ -21,8 +21,6 @@ class AioBoto:
         )
         self.s3_client = await self.s3_client_cm.__aenter__()
 
-        print("✅ Minio 연결 성공")
-
     @time_logger
     async def upload_image_with_client(self, file, bucket_name: str, key: str):
         await self.s3_client.upload_fileobj(file, Bucket=bucket_name, Key=key)

@@ -1,13 +1,16 @@
 import os
+import sys
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import asyncio
+import pytz
+from dotenv import load_dotenv
 
 from app.storage.aio_boto import AioBoto
 from app.message_queue.aio_consumer import AioConsumer
 
-
-from dotenv import load_dotenv
-
+KST = pytz.timezone("Asia/Seoul")
 load_dotenv()
 
 minio_host = os.getenv("MINIO_HOST")
@@ -28,20 +31,46 @@ if not rabbitmq_host or not rabbitmq_port or not rabbitmq_user or not rabbitmq_p
 async def main():
     minio = AioBoto(f"http://{minio_host}:{minio_port}")
     await minio.connect()
+
     consumer = AioConsumer(
         minio_manager=minio,
         amqp_url=f"amqp://{rabbitmq_user}:{rabbitmq_password}@{rabbitmq_host}:{rabbitmq_port}/",
         queue_name=rabbitmq_consume_queue,
     )
-
     await consumer.connect()
-    await consumer.consume()
+
+    consume_task = asyncio.create_task(consumer.consume())
 
     try:
-        await asyncio.Future()
+        while True:
+            await asyncio.sleep(1)
     except KeyboardInterrupt:
+        print("KeyboardInterrupt가 감지되었습니다. 종료 중...")
+    finally:
+        consume_task.cancel()
+        try:
+            await consume_task
+        except asyncio.CancelledError:
+            print("consume_task 취소됨")
         await consumer.close()
+        if hasattr(minio, "close"):
+            await minio.close()
+
+        current_task = asyncio.current_task()
+        pending = [task for task in asyncio.all_tasks() if task is not current_task]
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+
+        loop = asyncio.get_running_loop()
+        await loop.shutdown_asyncgens()
+
+        print("자원 정리 완료. 프로그램 종료.")
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("프로그램이 종료되었습니다.")
