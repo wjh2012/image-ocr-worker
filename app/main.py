@@ -1,14 +1,18 @@
 import os
 import sys
 
+from app.ocr.ocr_service import OcrService
+from app.ocr.ocr_service_impl import OcrServiceImpl
+
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 
 import asyncio
 import pytz
 from dotenv import load_dotenv
 
 from app.storage.aio_boto import AioBoto
-from app.message_queue.aio_consumer import AioConsumer
+from app.messaging.consume.aio_consumer import AioConsumer
 
 KST = pytz.timezone("Asia/Seoul")
 load_dotenv()
@@ -32,10 +36,13 @@ async def main():
     minio = AioBoto(f"http://{minio_host}:{minio_port}")
     await minio.connect()
 
+    ocr_service = OcrServiceImpl()
+
     consumer = AioConsumer(
         minio_manager=minio,
         amqp_url=f"amqp://{rabbitmq_user}:{rabbitmq_password}@{rabbitmq_host}:{rabbitmq_port}/",
         queue_name=rabbitmq_consume_queue,
+        ocr_service=ocr_service,
     )
     await consumer.connect()
 

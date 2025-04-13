@@ -10,7 +10,7 @@ from aio_pika.abc import AbstractIncomingMessage
 from pymongo.errors import PyMongoError
 
 from app.db.mongo import mongo_collection
-from app.service.ocr_service import OcrService
+from app.ocr.ocr_service import OcrService
 from app.storage.aio_boto import AioBoto
 
 logging.basicConfig(
@@ -22,6 +22,7 @@ class AioConsumer:
     def __init__(
         self,
         minio_manager: AioBoto,
+        ocr_service: OcrService,
         amqp_url: str,
         queue_name: str,
         prefetch_count: int = 1,
@@ -30,12 +31,12 @@ class AioConsumer:
         self.queue_name = queue_name
         self.prefetch_count = prefetch_count
         self.minio_manager = minio_manager
+        self.ocr_service = ocr_service
         self._connection = None
         self._channel = None
         self._queue = None
         self._dlx = None
         self._dlq = None
-        self.ocr_service = OcrService()
 
     async def connect(self):
         self._connection = await aio_pika.connect_robust(self.amqp_url)
