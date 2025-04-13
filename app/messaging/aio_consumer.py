@@ -1,6 +1,5 @@
 import io
 import json
-import uuid
 from datetime import datetime
 
 import aio_pika
@@ -10,7 +9,7 @@ from PIL import Image
 from aio_pika.abc import AbstractIncomingMessage
 from pymongo.errors import PyMongoError
 
-from app.db.mongo import mongo_client, mongo_collection
+from app.db.mongo import mongo_collection
 from app.service.ocr_service import OcrService
 from app.storage.aio_boto import AioBoto
 
@@ -91,15 +90,6 @@ class AioConsumer:
             created_time = datetime.now()
             file_obj.close()
 
-            print(ocr_result.txts)
-
-            # session = await mongo_client.start_session()
-            # async with session:
-            #     async with session.start_transaction():
-            #         await mongo_collection.insert_one(
-            #             {"name": "Alice", "age": 25}, session=session
-            #         )
-            #         logging.info("✅ nosql에 정보 저장 완료")
             try:
                 result = await mongo_collection.insert_one(
                     {
