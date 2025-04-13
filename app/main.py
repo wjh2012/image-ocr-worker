@@ -24,6 +24,7 @@ rabbitmq_port = os.getenv("RABBITMQ_PORT")
 rabbitmq_user = os.getenv("RABBITMQ_USER")
 rabbitmq_password = os.getenv("RABBITMQ_PASSWORD")
 rabbitmq_consume_queue = os.getenv("RABBITMQ_CONSUME_QUEUE")
+rabbitmq_produce_queue = os.getenv("RABBITMQ_PRODUCE_QUEUE")
 
 if not minio_host or not minio_port:
     raise ValueError("MINIO_HOST 또는 MINIO_PORT 환경 변수가 설정되지 않았습니다.")
@@ -41,7 +42,8 @@ async def main():
     consumer = AioConsumer(
         minio_manager=minio,
         amqp_url=f"amqp://{rabbitmq_user}:{rabbitmq_password}@{rabbitmq_host}:{rabbitmq_port}/",
-        queue_name=rabbitmq_consume_queue,
+        consume_queue=rabbitmq_consume_queue,
+        produce_queue=rabbitmq_produce_queue,
         ocr_service=ocr_service,
     )
     await consumer.connect()

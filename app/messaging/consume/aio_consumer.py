@@ -24,11 +24,13 @@ class AioConsumer:
         minio_manager: AioBoto,
         ocr_service: OcrService,
         amqp_url: str,
-        queue_name: str,
+        consume_queue: str,
+        produce_queue: str,
         prefetch_count: int = 1,
     ):
         self.amqp_url = amqp_url
-        self.queue_name = queue_name
+        self.consume_queue = consume_queue
+        self.produce_queue = produce_queue
         self.prefetch_count = prefetch_count
         self.minio_manager = minio_manager
         self.ocr_service = ocr_service
@@ -56,9 +58,11 @@ class AioConsumer:
         }
 
         self._queue = await self._channel.declare_queue(
-            self.queue_name, durable=True, arguments=args
+            self.consume_queue, durable=True, arguments=args
         )
-        logging.info(f"✅ RabbitMQ 연결 성공: {self.amqp_url}, 큐: {self.queue_name}")
+        logging.info(
+            f"✅ RabbitMQ 연결 성공: {self.amqp_url}, 큐: {self.consume_queue}"
+        )
 
     async def on_message(self, message: AbstractIncomingMessage) -> None:
         async with message.process(requeue=True):
@@ -104,17 +108,37 @@ class AioConsumer:
 
                 if result.inserted_id:
                     logging.info(f"✅ nosql에 정보 저장 완료, ID: {result.inserted_id}")
+                    await self.publish_message(
+                        routing_key="ocr_completed_queue",
+                        message_body={
+                            "gid": gid,
+                            "status": "completed",
+                            "created_time": str(created_time),
+                        },
+                    )
                 else:
                     logging.warning("⚠️ nosql에 정보가 저장되지 않았습니다.")
 
             except PyMongoError as e:
                 logging.error(f"❌ nosql 저장 실패: {e}")
 
+    async def publish_message(self, routing_key: str, message_body: dict):
+        exchange = await self._channel.get_exchange(name="")  # default exchange
+        await exchange.publish(
+            aio_pika.Message(
+                body=json.dumps(message_body).encode(),
+                content_type="application/json",
+                delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
+            ),
+            routing_key=self.produce_queue,
+        )
+        logging.info(f"📤 메시지 발행 완료: {routing_key}")
+
     async def consume(self):
         if not self._queue:
             await self.connect()
 
-        logging.info(f"📡 큐({self.queue_name})에서 메시지 소비 시작...")
+        logging.info(f"📡 큐({self.consume_queue})에서 메시지 소비 시작...")
         await self._queue.consume(self.on_message, no_ack=False)
 
     async def close(self):
