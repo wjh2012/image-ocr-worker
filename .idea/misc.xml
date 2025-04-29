@@ -4,4 +4,5 @@
     <option name="enabledOnSave" value="true" />
     <option name="sdkName" value="Python 3.10 (image-ocr-worker)" />
   </component>
+  <component name="ProjectRootManager" version="2" project-jdk-name="Python 3.10 (image-ocr-worker)" project-jdk-type="Python SDK" />
 </project>

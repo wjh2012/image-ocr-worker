@@ -1,11 +1,9 @@
 import os
 import sys
 
-from app.ocr.ocr_service import OcrService
-from app.ocr.ocr_service_impl import OcrServiceImpl
-
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+from app.ocr.ocr_service_impl import OcrServiceImpl
 
 import asyncio
 import pytz
