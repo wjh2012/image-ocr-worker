@@ -14,6 +14,7 @@ SQLAlchemy
 alembic
 python-dotenv
 motor
+pydantic-settings
 
 uuid7
 pytz

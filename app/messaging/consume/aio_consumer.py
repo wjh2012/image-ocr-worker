@@ -9,9 +9,12 @@ from PIL import Image
 from aio_pika.abc import AbstractIncomingMessage
 from pymongo.errors import PyMongoError
 
+from app.config.env_config import get_settings
 from app.db.mongo import mongo_collection
 from app.ocr.ocr_service import OcrService
 from app.storage.aio_boto import AioBoto
+
+config = get_settings()
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
@@ -23,45 +26,65 @@ class AioConsumer:
         self,
         minio_manager: AioBoto,
         ocr_service: OcrService,
-        amqp_url: str,
-        consume_queue: str,
-        produce_queue: str,
-        prefetch_count: int = 1,
     ):
-        self.amqp_url = amqp_url
-        self.consume_queue = consume_queue
-        self.produce_queue = produce_queue
-        self.prefetch_count = prefetch_count
         self.minio_manager = minio_manager
         self.ocr_service = ocr_service
+
+        self.amqp_url = f"amqp://{config.rabbitmq_user}:{config.rabbitmq_password}@{config.rabbitmq_host}:{config.rabbitmq_port}"
+
+        self.consume_exchange_name = config.rabbitmq_image_ocr_consume_exchange
+        self.consume_queue_name = config.rabbitmq_image_ocr_consume_queue
+        self.consume_routing_key = config.rabbitmq_image_ocr_consume_routing_key
+
+        self.publish_exchange_name = config.rabbitmq_image_ocr_publish_exchange
+        self.publish_routing_key = config.rabbitmq_image_ocr_publish_routing_key
+
+        self.prefetch_count = 1
+
+        self.dlx_name = config.rabbitmq_image_ocr_dlx
+        self.dlx_routing_key = config.rabbitmq_image_ocr_dlx_routing_key
+
         self._connection = None
         self._channel = None
-        self._queue = None
+
+        self._consume_exchange = None
+        self._consume_queue = None
+
+        self._publish_exchange = None
+
         self._dlx = None
         self._dlq = None
 
     async def connect(self):
         self._connection = await aio_pika.connect_robust(self.amqp_url)
         self._channel = await self._connection.channel()
+
         await self._channel.set_qos(prefetch_count=self.prefetch_count)
 
-        self._dlx = await self._channel.declare_exchange(
-            "dead_letter_exchange", aio_pika.ExchangeType.DIRECT
+        self._publish_exchange = await self._channel.declare_exchange(
+            self.publish_exchange_name, aio_pika.ExchangeType.DIRECT, durable=True
         )
-        self._dlq = await self._channel.declare_queue("dead_letter_queue")
-        await self._dlq.bind(self._dlx, routing_key="dead_letter")
+        self._consume_exchange = await self._channel.get_exchange(
+            self.consume_exchange_name
+        )
+        self._dlx = await self._channel.declare_exchange(
+            self.dlx_name, aio_pika.ExchangeType.DIRECT
+        )
 
         args = {
-            "x-dead-letter-exchange": "dead_letter_exchange",
-            "x-dead-letter-routing-key": "dead_letter",
+            "x-dead-letter-exchange": self.dlx_name,
+            "x-dead-letter-routing-key": self.dlx_routing_key,
             "x-message-ttl": 10000,  # 10초
         }
 
-        self._queue = await self._channel.declare_queue(
-            self.consume_queue, durable=True, arguments=args
+        self._consume_queue = await self._channel.declare_queue(
+            self.consume_queue_name, durable=True, arguments=args
+        )
+        await self._consume_queue.bind(
+            self._consume_exchange, routing_key=self.consume_routing_key
         )
         logging.info(
-            f"✅ RabbitMQ 연결 성공: {self.amqp_url}, 큐: {self.consume_queue}"
+            f"✅ RabbitMQ 연결 성공: {self.amqp_url}, 큐: {self.consume_queue_name}"
         )
 
     async def on_message(self, message: AbstractIncomingMessage) -> None:
@@ -88,6 +111,7 @@ class AioConsumer:
             except Exception as e:
                 logging.error(f"이미지 변환 실패: {e}")
                 file_obj.close()
+                await message.reject(requeue=False)
                 return
             file_received_time = datetime.now()
 
@@ -109,7 +133,6 @@ class AioConsumer:
                 if result.inserted_id:
                     logging.info(f"✅ nosql에 정보 저장 완료, ID: {result.inserted_id}")
                     await self.publish_message(
-                        routing_key="ocr_completed_queue",
                         message_body={
                             "gid": gid,
                             "status": "completed",
@@ -122,24 +145,23 @@ class AioConsumer:
             except PyMongoError as e:
                 logging.error(f"❌ nosql 저장 실패: {e}")
 
-    async def publish_message(self, routing_key: str, message_body: dict):
-        exchange = await self._channel.get_exchange(name="")  # default exchange
-        await exchange.publish(
+    async def publish_message(self, message_body: dict):
+        await self._publish_exchange.publish(
             aio_pika.Message(
                 body=json.dumps(message_body).encode(),
                 content_type="application/json",
                 delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
             ),
-            routing_key=self.produce_queue,
+            routing_key=self.publish_routing_key,
         )
-        logging.info(f"📤 메시지 발행 완료: {routing_key}")
+        logging.info(f"📤 메시지 발행 완료: {self.publish_routing_key}")
 
     async def consume(self):
-        if not self._queue:
+        if not self._consume_queue:
             await self.connect()
 
-        logging.info(f"📡 큐({self.consume_queue})에서 메시지 소비 시작...")
-        await self._queue.consume(self.on_message, no_ack=False)
+        logging.info(f"📡 큐({self.consume_queue_name})에서 메시지 소비 시작...")
+        await self._consume_queue.consume(self.on_message, no_ack=False)
 
     async def close(self):
         if self._connection:

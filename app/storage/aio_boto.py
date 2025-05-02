@@ -1,16 +1,16 @@
 import io
 import os
-from datetime import datetime
 
 import aioboto3
-from PIL import Image
-
 from app.config.custom_logger import time_logger
+from app.config.env_config import get_settings
+
+config = get_settings()
 
 
 class AioBoto:
-    def __init__(self, minio_url: str):
-        self.minio_url = minio_url
+    def __init__(self):
+        self.minio_url = f"http://{config.minio_host}:{config.minio_port}"
         self._session = None
         self.s3_client_cm = None
         self.s3_client = None
@@ -42,16 +42,3 @@ class AioBoto:
         if self.s3_client_cm:
             await self.s3_client_cm.__aexit__(None, None, None)
         print("❌ Minio 연결 종료")
-
-
-minio_host = os.getenv("MINIO_HOST")
-minio_port = os.getenv("MINIO_PORT")
-minio_manager = AioBoto(f"http://{minio_host}:{minio_port}")
-
-
-async def load_image_from_minio(bucket_name, file_name):
-    file_obj = io.BytesIO()
-    await minio_manager.download_image_with_client(bucket_name, file_name, file_obj)
-    file_obj.seek(0)
-    image = Image.open(file_obj)
-    return image, datetime.now()
