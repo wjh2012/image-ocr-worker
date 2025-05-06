@@ -136,6 +136,7 @@ class AioConsumer:
                         message_body={
                             "gid": gid,
                             "status": "completed",
+                            "ocr_result": ocr_result.txts,
                             "created_time": str(created_time),
                         },
                     )
