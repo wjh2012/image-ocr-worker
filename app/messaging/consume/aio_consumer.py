@@ -1,6 +1,7 @@
 import io
 import json
-from datetime import datetime
+from dataclasses import asdict
+from datetime import datetime, timezone
 
 import aio_pika
 import logging
@@ -8,9 +9,12 @@ import logging
 from PIL import Image
 from aio_pika.abc import AbstractIncomingMessage
 from pymongo.errors import PyMongoError
+from uuid_extensions import uuid7str
 
 from app.config.env_config import get_settings
 from app.db.mongo import mongo_collection
+from app.messaging.consume_message import parse_message
+from app.messaging.publish_message import PublishMessageHeader, PublishMessagePayload
 from app.ocr.ocr_service import OcrService
 from app.storage.aio_boto import AioBoto
 
@@ -89,17 +93,28 @@ class AioConsumer:
 
     async def on_message(self, message: AbstractIncomingMessage) -> None:
         async with message.process(requeue=True):
-            message_received_time = datetime.now()
+            message_received_time = datetime.now(timezone.utc).isoformat()
             logging.info("📩 메시지 수신!")
 
-            data = json.loads(message.body)
-            gid = data["gid"]
-            file_name = data["file_name"]
-            bucket_name = data["bucket"]
+            header, payload = parse_message(message)
+            if not header or not payload:
+                logging.warning("⚠️ 메시지 파싱 실패로 인해 처리를 중단합니다.")
+                return
+
+            gid = payload.gid
+            original_object_key = payload.original_object_key
+            download_bucket_name = payload.bucket
+
+            logging.info(
+                f"✅ 메시지 파싱 완료 - GID: {gid}, Bucket: {download_bucket_name}"
+            )
 
             file_obj = io.BytesIO()
+
             await self.minio_manager.download_image_with_client(
-                bucket_name=bucket_name, key=file_name, file_obj=file_obj
+                bucket_name=download_bucket_name,
+                key=original_object_key,
+                file_obj=file_obj,
             )
             file_length = file_obj.getbuffer().nbytes
             logging.info(f"✅ MinIO 파일 다운로드 성공: Size: {file_length} bytes")
@@ -113,10 +128,11 @@ class AioConsumer:
                 file_obj.close()
                 await message.reject(requeue=False)
                 return
-            file_received_time = datetime.now()
+
+            file_received_time = datetime.now(timezone.utc).isoformat()
 
             ocr_result = self.ocr_service.ocr(image)
-            created_time = datetime.now()
+            ocr_completed_time = datetime.now(timezone.utc).isoformat()
             file_obj.close()
 
             try:
@@ -126,33 +142,46 @@ class AioConsumer:
                         "ocr_result": ocr_result.txts,
                         "message_received_time": message_received_time,
                         "file_received_time": file_received_time,
-                        "created_time": created_time,
+                        "ocr_completed_time": ocr_completed_time,
                     }
                 )
 
                 if result.inserted_id:
                     logging.info(f"✅ nosql에 정보 저장 완료, ID: {result.inserted_id}")
-                    await self.publish_message(
-                        message_body={
-                            "gid": gid,
-                            "status": "completed",
-                            "ocr_result": ocr_result.txts,
-                            "created_time": str(created_time),
-                        },
+                    body = PublishMessagePayload(
+                        gid=gid,
+                        status="success",
+                        completed_at=ocr_completed_time,
+                        ocr_result=ocr_result.txts,
                     )
+                    await self.publish_message(trace_id=header.trace_id, body=body)
+
                 else:
                     logging.warning("⚠️ nosql에 정보가 저장되지 않았습니다.")
 
             except PyMongoError as e:
                 logging.error(f"❌ nosql 저장 실패: {e}")
 
-    async def publish_message(self, message_body: dict):
+    async def publish_message(self, trace_id: str, body: PublishMessagePayload):
+        event_id = uuid7str()
+
+        headers = PublishMessageHeader(
+            event_id=event_id,
+            event_type=self.publish_routing_key,
+            trace_id=trace_id,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            source_service="image-mock-producer",
+        )
+
+        message = aio_pika.Message(
+            body=json.dumps(asdict(body)).encode("utf-8"),
+            headers=asdict(headers),
+            content_type="application/json",
+            delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
+        )
+
         await self._publish_exchange.publish(
-            aio_pika.Message(
-                body=json.dumps(message_body).encode(),
-                content_type="application/json",
-                delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
-            ),
+            message=message,
             routing_key=self.publish_routing_key,
         )
         logging.info(f"📤 메시지 발행 완료: {self.publish_routing_key}")
