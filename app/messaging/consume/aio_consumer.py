@@ -14,7 +14,11 @@ from uuid_extensions import uuid7str
 from app.config.env_config import get_settings
 from app.db.mongo import mongo_collection
 from app.messaging.consume_message import parse_message
-from app.messaging.publish_message import PublishMessageHeader, PublishMessagePayload
+from app.messaging.publish_message import (
+    PublishMessageHeader,
+    PublishMessageBody,
+    OcrServiceData,
+)
 from app.ocr.ocr_service import OcrService
 from app.storage.aio_boto import AioBoto
 
@@ -145,24 +149,28 @@ class AioConsumer:
                         "ocr_completed_time": ocr_completed_time,
                     }
                 )
-
                 if result.inserted_id:
                     logging.info(f"✅ nosql에 정보 저장 완료, ID: {result.inserted_id}")
-                    body = PublishMessagePayload(
+
+                    data = OcrServiceData(
+                        text=ocr_result.txts,
+                    )
+
+                    body = PublishMessageBody(
                         gid=gid,
                         status="success",
-                        completed_at=ocr_completed_time,
-                        ocr_result=ocr_result.txts,
+                        completed_at=datetime.now(timezone.utc).isoformat(),
+                        payload=data,
                     )
-                    await self.publish_message(trace_id=header.trace_id, body=body)
 
+                    await self.publish_message(trace_id=header.trace_id, body=body)
                 else:
                     logging.warning("⚠️ nosql에 정보가 저장되지 않았습니다.")
 
             except PyMongoError as e:
                 logging.error(f"❌ nosql 저장 실패: {e}")
 
-    async def publish_message(self, trace_id: str, body: PublishMessagePayload):
+    async def publish_message(self, trace_id: str, body: PublishMessageBody):
         event_id = uuid7str()
 
         headers = PublishMessageHeader(

@@ -12,8 +12,13 @@ class PublishMessageHeader:
 
 
 @dataclass
-class PublishMessagePayload:
+class OcrServiceData:
+    text: list[str]
+
+
+@dataclass
+class PublishMessageBody:
     gid: str
-    status: str
+    status: Literal["success", "fail"]
     completed_at: str
-    ocr_result: any
+    payload: OcrServiceData
